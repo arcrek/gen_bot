@@ -1,6 +1,6 @@
 # Telegram CSV Generator Bot
 
-A powerful Telegram bot that generates CSV files with random user data for Google Workspace bulk import. Features admin-controlled authentication, username-based authorization, and customizable password options.
+A powerful Telegram bot that generates CSV files with random user data for Google Workspace bulk import. Features admin-controlled authentication, username-based authorization, interactive menu system, and customizable password options.
 
 ## 🚀 Features
 
@@ -9,6 +9,12 @@ A powerful Telegram bot that generates CSV files with random user data for Googl
 - **Google Workspace Compatible**: Perfect format for bulk user import
 - **Custom Passwords**: Support for default or custom passwords
 - **Flexible Email Format**: Uses realistic year-based email addresses (1950-2100)
+
+### User Interface
+- **Interactive Menu System**: Easy-to-use inline keyboard navigation
+- **Button-Based Navigation**: Intuitive menu system with emoji icons
+- **Mobile-Friendly**: Optimized for mobile Telegram usage
+- **Quick Actions**: Direct access to common functions from start screen
 
 ### Authentication & Security
 - **Admin Control**: Two hardcoded admin users with full control
@@ -19,17 +25,19 @@ A powerful Telegram bot that generates CSV files with random user data for Googl
 - **Access Logging**: All unauthorized access attempts are logged
 
 ### Admin Features
-- **User Management**: Add/remove users by ID or username
+- **Admin Panel**: Dedicated admin interface with organized sections
+- **User Management**: Add/remove users by ID or username through menu
 - **Pending System**: Pre-authorize users by username before they use the bot
-- **Statistics**: View bot usage and user statistics
-- **User Lists**: View all authorized and pending users
+- **Statistics Dashboard**: View bot usage and user statistics in organized format
+- **User Lists**: View all authorized and pending users with navigation
 
 ## 📋 Commands
 
 ### User Commands
 | Command | Description | Example |
 |---------|-------------|---------|
-| `/start` | Show welcome message and bot status | `/start` |
+| `/start` | Show welcome message with quick action buttons | `/start` |
+| `/menu` | **Open interactive menu system** | `/menu` |
 | `/help` | Display detailed help information | `/help` |
 | `/status` | Check your access status | `/status` |
 | `/g <quantity> <domain> [password]` | Generate CSV file | `/g 100 company.com` |
@@ -44,6 +52,26 @@ A powerful Telegram bot that generates CSV files with random user data for Googl
 | `/listusers` | List all authorized users | `/listusers` |
 | `/pendingusers` | List pending usernames | `/pendingusers` |
 | `/stats` | View bot statistics | `/stats` |
+
+## 🎛️ Interactive Menu System
+
+### Main Menu Features
+- **📊 Generate CSV**: Step-by-step instructions with examples
+- **❓ Help**: Comprehensive help with command reference
+- **📋 Status**: Your authorization status and bot statistics
+- **📖 Examples**: Detailed command examples and usage tips
+- **👑 Admin Panel**: Admin-only section (for authorized administrators)
+
+### Admin Panel (Admin Users Only)
+- **👥 Manage Users**: View and manage authorized users
+- **📝 Manage Usernames**: Handle pending username authorizations
+- **📊 Statistics**: Detailed bot statistics and configuration info
+
+### Navigation Features
+- **🔙 Back Buttons**: Easy navigation between menu sections
+- **🔄 Refresh**: Update menu with current information
+- **Inline Keyboards**: Tap buttons instead of typing commands
+- **Context-Aware**: Menus adapt based on user permissions
 
 ## 📊 CSV Output Format
 
@@ -156,7 +184,35 @@ The following user IDs are hardcoded as administrators:
 4. If in pending list, automatically authorizes and removes from pending
 5. If not in either list, denies access with contact admin message
 
+## 📱 How to Use the Bot
+
+### Quick Start (Recommended)
+1. Send `/start` to the bot
+2. Click **📋 Open Menu** button
+3. Navigate using the interactive menu system
+4. Click **📊 Generate CSV** for instructions
+5. Type your `/g` command directly in chat
+
+### Traditional Method
+1. Send `/menu` for the main menu
+2. Use commands directly: `/g 100 company.com`
+3. Use `/help` for detailed information
+
+### Menu Navigation Tips
+- **Tap buttons** instead of typing commands
+- Use **🔙 Back** buttons to navigate between sections
+- **Admin users** get additional menu options
+- All information is **organized and easy to find**
+
 ## 📝 Usage Examples
+
+### Using the Menu System
+```
+1. Send: /menu
+2. Tap: 📊 Generate CSV
+3. Read instructions
+4. Type: /g 100 company.com
+```
 
 ### Generate CSV with Default Password
 ```bash
@@ -174,22 +230,20 @@ The following user IDs are hardcoded as administrators:
 - Password: `MySecurePass123`
 - Contains: 50 random users
 
+### Admin: Using Admin Panel
+```
+1. Send: /menu
+2. Tap: 👑 Admin Panel
+3. Choose: 👥 Manage Users or 📝 Manage Usernames
+4. View information and use commands as needed
+```
+
 ### Admin: Authorize User by Username
 ```bash
 /addusername johndoe
 ```
 - Adds @johndoe to pending list
 - When @johndoe sends any message, they're automatically authorized
-
-### Admin: View Statistics
-```bash
-/stats
-```
-Shows:
-- Total authorized users
-- Pending usernames
-- Database statistics
-- Bot configuration
 
 ## 🚫 Rate Limiting & Security
 
@@ -204,6 +258,7 @@ Shows:
 - **Access Logging**: Unauthorized attempts are logged
 - **File Cleanup**: Generated files are automatically deleted after sending
 - **Input Validation**: All user inputs are validated
+- **Menu Security**: Inline keyboard callbacks respect user permissions
 
 ## 🔧 Troubleshooting
 
@@ -218,11 +273,18 @@ Shows:
 - Check if user is authorized: `/listusers` (admin only)
 - Add user: `/adduser <user_id>` or `/addusername <username>`
 - Check user's exact ID in their `/status` command
+- Try using the `/menu` command for easier navigation
+
+#### Menu buttons don't work
+- Ensure user is authorized to use the bot
+- Try refreshing with `/menu` command
+- Check if there are any error messages
 
 #### CSV generation fails
 - Verify domain format is valid
 - Check quantity is between 1 and 10,000
 - Ensure user hasn't exceeded rate limit
+- Use the menu system for examples and help
 
 ### Log Files
 The bot logs important events including:
@@ -230,6 +292,7 @@ The bot logs important events including:
 - CSV generation requests
 - Error conditions
 - Admin actions
+- Menu interactions
 
 ## 📦 Dependencies
 
@@ -237,8 +300,9 @@ The bot requires the following Python packages:
 
 ```txt
 python-telegram-bot>=20.0
-python-dotenv>=1.0.0
 ```
+
+**Note**: `python-dotenv` is no longer required as the bot uses direct environment variable access.
 
 ## 🤝 Contributing
 
@@ -255,20 +319,25 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## 🆘 Support
 
 For support or questions:
-1. Check this README
-2. Contact the bot administrators
-3. Check the bot logs for error messages
+1. Use the **interactive menu system** (`/menu`) for guidance
+2. Check this README
+3. Contact the bot administrators
+4. Check the bot logs for error messages
 
 ## 🔄 Version History
 
 ### Latest Version
+- ✅ **Interactive menu system with inline keyboards**
+- ✅ **Enhanced user interface with navigation buttons**
+- ✅ **Admin panel with organized sections**
 - ✅ Username-based authentication
 - ✅ Auto-authorization system
 - ✅ Email format with years (1950-2100)
 - ✅ Comprehensive admin controls
 - ✅ Rate limiting and security
 - ✅ Google Workspace CSV format
+- ✅ Mobile-optimized interface
 
 ---
 
-**Note**: This bot is designed for Google Workspace user management. Always test with small quantities first and ensure you have proper authorization before bulk importing users into your organization. 
+**Note**: This bot is designed for Google Workspace user management. Use the interactive menu system (`/menu`) for the best experience. Always test with small quantities first and ensure you have proper authorization before bulk importing users into your organization. 
