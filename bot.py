@@ -21,7 +21,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 # Configuration
-BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
+BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '7855180309:AAHimWXNYVXA6bEOKyneLkmkHps_XuFyhXc')
 MAX_QUANTITY = 10000
 RATE_LIMIT_PER_MINUTE = 5
 OUTPUT_DIR = "generated_files"
