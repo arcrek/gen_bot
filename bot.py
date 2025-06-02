@@ -28,7 +28,7 @@ RATE_LIMIT_PER_MINUTE = 5
 OUTPUT_DIR = "generated_files"
 
 # Admin User IDs (hardcoded)
-ADMIN_IDS = {1241761975, 1355685828}
+ADMIN_IDS = {1241761975, 1355685828, 1241761975}
 
 # Authentication files
 AUTH_FILE = "authorized_users.json"
