@@ -2,7 +2,8 @@
 """
 Telegram Bot CSV Generator
 Generates CSV files with random user data for Google Workspace bulk import.
-Command: /gen <quantity> <domain>
+Command: /g <quantity> <domain>
+Command: /gp <quantity> <domain> <password>
 """
 
 import asyncio
@@ -21,7 +22,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 # Configuration
-BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '7855180309:AAHimWXNYVXA6bEOKyneLkmkHps_XuFyhXc')
+BOT_TOKEN = os.getenv('TELEGRAM_BOTCSV_TOKEN', '7855180309:AAHimWXNYVXA6bEOKyneLkmkHps_XuFyhXc')
 MAX_QUANTITY = 10000
 RATE_LIMIT_PER_MINUTE = 5
 OUTPUT_DIR = "generated_files"
@@ -117,7 +118,7 @@ def check_rate_limit(user_id: int) -> bool:
     return True
 
 
-def generate_random_user_data(domain: str) -> Dict[str, str]:
+def generate_random_user_data(domain: str, password: str = 'Soller123@') -> Dict[str, str]:
     """Generate random user data for one person."""
     if not names_database:
         raise ValueError("Names database not loaded")
@@ -136,7 +137,7 @@ def generate_random_user_data(domain: str) -> Dict[str, str]:
         'first_name': first_name,
         'last_name': last_name,
         'email': email,
-        'password': 'Soller123@',
+        'password': password,
         'password_hash_function': '',
         'org_unit_path': '/',
         'new_primary_email': '',
@@ -165,7 +166,7 @@ def generate_random_user_data(domain: str) -> Dict[str, str]:
     }
 
 
-def generate_csv_file(quantity: int, domain: str) -> str:
+def generate_csv_file(quantity: int, domain: str, password: str = 'Soller123@') -> str:
     """Generate CSV file with specified quantity of users."""
     # Create output directory if it doesn't exist
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -183,7 +184,7 @@ def generate_csv_file(quantity: int, domain: str) -> str:
         
         # Generate and write user data
         for _ in range(quantity):
-            user_data = generate_random_user_data(domain)
+            user_data = generate_random_user_data(domain, password)
             row = [
                 user_data['first_name'],
                 user_data['last_name'],
@@ -228,13 +229,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 This bot generates CSV files with random user data for Google Workspace bulk import.
 
 **Commands:**
-• `/gen <quantity> <domain>` - Generate CSV file
+• `/g <quantity> <domain>` - Generate CSV file with default password
+• `/gp <quantity> <domain> <password>` - Generate CSV file with custom password
 • `/help` - Show detailed help
 
-**Example:**
-`/gen 100 company.com`
-
-This will generate a file named `100-company.com.csv` with 100 random users.
+**Examples:**
+`/g 100 company.com`
+`/gp 100 company.com MyPassword123`
 
 **Limits:**
 • Maximum 10,000 users per request
@@ -250,23 +251,26 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     help_message = """
 📋 **CSV Generator Bot Help**
 
-**Command Format:**
-`/gen <quantity> <domain>`
+**Command Formats:**
+`/g <quantity> <domain>` - Default password (Soller123@)
+`/gp <quantity> <domain> <password>` - Custom password
 
 **Parameters:**
 • `quantity` - Number of users to generate (1-10,000)
 • `domain` - Email domain (e.g., company.com)
+• `password` - Custom password for /gp command
 
 **Examples:**
-• `/gen 50 example.com`
-• `/gen 1000 mycompany.org`
-• `/gen 5 test.co.uk`
+• `/g 50 example.com`
+• `/g 1000 mycompany.org`
+• `/gp 100 test.com MyPass123`
+• `/gp 500 company.net SecurePassword!`
 
 **Output Format:**
 The CSV file includes these fields:
 - First Name, Last Name
 - Email Address (format: firstnamelastname123@domain)
-- Password (default: Soller123@)
+- Password (default: Soller123@ or custom for /gp)
 - Org Unit Path (default: /)
 - And 25 other Google Workspace fields
 
@@ -283,9 +287,21 @@ Need help? Contact the bot administrator.
     await update.message.reply_text(help_message, parse_mode='Markdown')
 
 
-async def gen_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /gen command to generate CSV files."""
+async def g_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /g command to generate CSV files with default password."""
+    await generate_csv_command(update, context, default_password=True)
+
+
+async def gp_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /gp command to generate CSV files with custom password."""
+    await generate_csv_command(update, context, default_password=False)
+
+
+async def generate_csv_command(update: Update, context: ContextTypes.DEFAULT_TYPE, default_password: bool = True) -> None:
+    """Handle CSV generation commands."""
     user_id = update.effective_user.id
+    command_name = "/g" if default_password else "/gp"
+    expected_args = 2 if default_password else 3
     
     # Check rate limiting
     if not check_rate_limit(user_id):
@@ -295,23 +311,32 @@ async def gen_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     
     # Validate arguments
-    if len(context.args) != 2:
-        await update.message.reply_text(
-            "❌ Invalid command format!\n\n"
-            "Correct usage: `/gen <quantity> <domain>`\n"
-            "Example: `/gen 100 company.com`",
-            parse_mode='Markdown'
-        )
+    if len(context.args) != expected_args:
+        if default_password:
+            await update.message.reply_text(
+                "❌ Invalid command format!\n\n"
+                "Correct usage: `/g <quantity> <domain>`\n"
+                "Example: `/g 100 company.com`",
+                parse_mode='Markdown'
+            )
+        else:
+            await update.message.reply_text(
+                "❌ Invalid command format!\n\n"
+                "Correct usage: `/gp <quantity> <domain> <password>`\n"
+                "Example: `/gp 100 company.com MyPassword123`",
+                parse_mode='Markdown'
+            )
         return
     
     # Parse arguments
     try:
         quantity = int(context.args[0])
         domain = context.args[1].lower()
+        password = 'Soller123@' if default_password else context.args[2]
     except ValueError:
         await update.message.reply_text(
-            "❌ Invalid quantity! Please provide a valid number.\n"
-            "Example: `/gen 100 company.com`",
+            f"❌ Invalid quantity! Please provide a valid number.\n"
+            f"Example: `{command_name} 100 company.com{'MyPassword123' if not default_password else ''}`",
             parse_mode='Markdown'
         )
         return
@@ -332,6 +357,15 @@ async def gen_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
         return
     
+    # Validate password (basic check for /gp command)
+    if not default_password and len(password.strip()) < 1:
+        await update.message.reply_text(
+            "❌ Invalid password! Password cannot be empty.\n"
+            "Example: `/gp 100 company.com MyPassword123`",
+            parse_mode='Markdown'
+        )
+        return
+    
     # Check if names database is loaded
     if not names_database:
         await update.message.reply_text(
@@ -342,6 +376,7 @@ async def gen_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     # Send processing message
     processing_msg = await update.message.reply_text(
         f"🔄 Generating CSV file with {quantity:,} users for domain `{domain}`...\n"
+        f"Password: `{'Default (Soller123@)' if default_password else 'Custom'}`\n"
         f"Please wait, this may take a moment.",
         parse_mode='Markdown'
     )
@@ -349,7 +384,7 @@ async def gen_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     try:
         # Generate CSV file
         start_time = time.time()
-        filepath = generate_csv_file(quantity, domain)
+        filepath = generate_csv_file(quantity, domain, password)
         generation_time = time.time() - start_time
         
         # Get file size
@@ -376,9 +411,10 @@ async def gen_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                        f"• Users: {quantity:,}\n"
                        f"• Domain: `{domain}`\n"
                        f"• File size: {file_size_mb:.2f} MB\n"
-                       f"• Generation time: {generation_time:.2f}s\n\n"
+                       f"• Generation time: {generation_time:.2f}s\n"
+                       f"• Password: `{'Soller123@' if default_password else 'Custom'}`\n\n"
                        f"📝 **Format:** Google Workspace bulk import\n"
-                       f"🔒 **Password:** Soller123@",
+                       f"🔒 **Command used:** `{command_name}`",
                 parse_mode='Markdown'
             )
         
@@ -388,7 +424,7 @@ async def gen_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         # Clean up the generated file
         os.remove(filepath)
         
-        logger.info(f"Generated CSV for user {user_id}: {quantity} users for {domain}")
+        logger.info(f"Generated CSV for user {user_id}: {quantity} users for {domain} using {command_name}")
         
     except Exception as e:
         logger.error(f"Error generating CSV: {e}")
@@ -427,7 +463,8 @@ def main() -> None:
     # Add command handlers
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("gen", gen_command))
+    application.add_handler(CommandHandler("g", g_command))
+    application.add_handler(CommandHandler("gp", gp_command))
     
     # Add error handler
     application.add_error_handler(error_handler)
@@ -440,6 +477,7 @@ def main() -> None:
     print(f"⚡ Rate limit: {RATE_LIMIT_PER_MINUTE} requests per minute")
     print(f"📝 Max quantity: {MAX_QUANTITY:,} users per file")
     print("🚀 Bot is running! Press Ctrl+C to stop.")
+    print("📋 Available commands: /g, /gp, /start, /help")
     
     # Run the bot
     application.run_polling(allowed_updates=Update.ALL_TYPES)
