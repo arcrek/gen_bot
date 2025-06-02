@@ -2,8 +2,8 @@
 """
 Telegram Bot CSV Generator
 Generates CSV files with random user data for Google Workspace bulk import.
-Command: /g <quantity> <domain>
-Command: /gp <quantity> <domain> <password>
+Command: /g <quantity> <domain> [password]
+Authentication required - Admin controlled access
 """
 
 import asyncio
@@ -16,16 +16,23 @@ import re
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 # Configuration
-BOT_TOKEN = os.getenv('TELEGRAM_BOTCSV_TOKEN', '7855180309:AAHimWXNYVXA6bEOKyneLkmkHps_XuFyhXc')
+BOT_TOKEN = os.getenv('TELEGRAM_BOTCSV_TOKEN', 'TOKEN_HERE')
 MAX_QUANTITY = 10000
 RATE_LIMIT_PER_MINUTE = 5
 OUTPUT_DIR = "generated_files"
+
+# Admin User IDs (hardcoded)
+ADMIN_IDS = {1241761975, 1355685828}
+
+# Authentication files
+AUTH_FILE = "authorized_users.json"
+PENDING_USERNAMES_FILE = "pending_usernames.json"
 
 # CSV Header as specified in the requirements
 CSV_HEADER = [
@@ -63,6 +70,8 @@ CSV_HEADER = [
 # Global variables
 names_database: List[str] = []
 user_requests: Dict[int, List[float]] = {}
+authorized_users: Set[int] = set()
+pending_usernames: Set[str] = set()
 
 # Configure logging
 logging.basicConfig(
@@ -70,6 +79,100 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+
+def load_authorized_users() -> None:
+    """Load authorized users from file."""
+    global authorized_users
+    try:
+        with open(AUTH_FILE, 'r', encoding='utf-8') as file:
+            user_list = json.load(file)
+            authorized_users = set(user_list)
+            # Always include admins
+            authorized_users.update(ADMIN_IDS)
+        logger.info(f"Loaded {len(authorized_users)} authorized users")
+    except FileNotFoundError:
+        # Create file with only admins
+        authorized_users = ADMIN_IDS.copy()
+        save_authorized_users()
+        logger.info("Created new authorized users file with admin users")
+    except json.JSONDecodeError:
+        logger.error("Invalid JSON format in authorized_users.json!")
+        authorized_users = ADMIN_IDS.copy()
+        save_authorized_users()
+
+
+def save_authorized_users() -> None:
+    """Save authorized users to file."""
+    try:
+        with open(AUTH_FILE, 'w', encoding='utf-8') as file:
+            json.dump(list(authorized_users), file, indent=2)
+        logger.info("Saved authorized users to file")
+    except Exception as e:
+        logger.error(f"Error saving authorized users: {e}")
+
+
+def load_pending_usernames() -> None:
+    """Load pending usernames from file."""
+    global pending_usernames
+    try:
+        with open(PENDING_USERNAMES_FILE, 'r', encoding='utf-8') as file:
+            username_list = json.load(file)
+            pending_usernames = set(username_list)
+        logger.info(f"Loaded {len(pending_usernames)} pending usernames")
+    except FileNotFoundError:
+        # Create empty file
+        pending_usernames = set()
+        save_pending_usernames()
+        logger.info("Created new pending usernames file")
+    except json.JSONDecodeError:
+        logger.error("Invalid JSON format in pending_usernames.json!")
+        pending_usernames = set()
+        save_pending_usernames()
+
+
+def save_pending_usernames() -> None:
+    """Save pending usernames to file."""
+    try:
+        with open(PENDING_USERNAMES_FILE, 'w', encoding='utf-8') as file:
+            json.dump(list(pending_usernames), file, indent=2)
+        logger.info("Saved pending usernames to file")
+    except Exception as e:
+        logger.error(f"Error saving pending usernames: {e}")
+
+
+def is_admin(user_id: int) -> bool:
+    """Check if user is an admin."""
+    return user_id in ADMIN_IDS
+
+
+def is_authorized(user_id: int) -> bool:
+    """Check if user is authorized to use the bot."""
+    return user_id in authorized_users
+
+
+def check_and_authorize_username(username: str, user_id: int) -> bool:
+    """Check if username is in pending list and authorize if found."""
+    if username and username.lower() in {u.lower() for u in pending_usernames}:
+        # Find the exact case username to remove
+        username_to_remove = None
+        for pending_username in pending_usernames:
+            if pending_username.lower() == username.lower():
+                username_to_remove = pending_username
+                break
+        
+        if username_to_remove:
+            # Add user to authorized list
+            authorized_users.add(user_id)
+            save_authorized_users()
+            
+            # Remove from pending list
+            pending_usernames.remove(username_to_remove)
+            save_pending_usernames()
+            
+            logger.info(f"Auto-authorized user {user_id} (@{username}) from pending list")
+            return True
+    return False
 
 
 def load_names_database() -> bool:
@@ -127,11 +230,11 @@ def generate_random_user_data(domain: str, password: str = 'Soller123@') -> Dict
     first_name = random.choice(names_database).title()
     last_name = random.choice(names_database).title()
     
-    # Generate 3-digit random number (001-999)
-    random_number = random.randint(1, 999)
+    # Generate random number from 1950 to 2100
+    random_number = random.randint(1950, 2100)
     
     # Create email address
-    email = f"{first_name.lower()}{last_name.lower()}{random_number:03d}@{domain}"
+    email = f"{first_name.lower()}{last_name.lower()}{random_number}@{domain}"
     
     return {
         'first_name': first_name,
@@ -221,22 +324,84 @@ def generate_csv_file(quantity: int, domain: str, password: str = 'Soller123@') 
     return filepath
 
 
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle all messages to check for username authentication."""
+    user_id = update.effective_user.id
+    username = update.effective_user.username
+    
+    # Check if user is pending authentication by username
+    if username and not is_authorized(user_id):
+        was_authorized = check_and_authorize_username(username, user_id)
+        if was_authorized:
+            await update.message.reply_text(
+                f"🎉 **Welcome!**\n\n"
+                f"You have been automatically authorized based on your username @{username}!\n\n"
+                f"You can now use the bot. Type /start to see available commands.",
+                parse_mode='Markdown'
+            )
+            return
+
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start command."""
-    welcome_message = """
+    user_id = update.effective_user.id
+    username = update.effective_user.username or "Unknown"
+    
+    # Check if user should be auto-authorized by username
+    if username != "Unknown" and not is_authorized(user_id):
+        was_authorized = check_and_authorize_username(username, user_id)
+        if was_authorized:
+            await update.message.reply_text(
+                f"🎉 **Automatically Authorized!**\n\n"
+                f"Welcome @{username}! You have been automatically authorized.\n\n"
+                f"Proceeding to show you the bot features...",
+                parse_mode='Markdown'
+            )
+    
+    if not is_authorized(user_id):
+        await update.message.reply_text(
+            "🚫 **Access Denied**\n\n"
+            f"Your user ID: `{user_id}`\n"
+            f"Username: @{username}\n\n"
+            "You are not authorized to use this bot. Please contact an administrator to request access.",
+            parse_mode='Markdown'
+        )
+        logger.warning(f"Unauthorized access attempt by user {user_id} (@{username})")
+        return
+    
+    admin_status = "👑 Admin" if is_admin(user_id) else "👤 User"
+    
+    welcome_message = f"""
 🤖 **Welcome to CSV Generator Bot!**
+
+Status: {admin_status}
+User ID: `{user_id}`
 
 This bot generates CSV files with random user data for Google Workspace bulk import.
 
-**Commands:**
-• `/g <quantity> <domain>` - Generate CSV file with default password
-• `/gp <quantity> <domain> <password>` - Generate CSV file with custom password
+**User Commands:**
+• `/g <quantity> <domain> [password]` - Generate CSV file
 • `/help` - Show detailed help
+• `/status` - Check your access status
 
 **Examples:**
-`/g 100 company.com`
-`/gp 100 company.com MyPassword123`
+`/g 100 company.com` (uses default password: Soller123@)
+`/g 100 company.com MyPassword123` (uses custom password)
+"""
 
+    if is_admin(user_id):
+        welcome_message += """
+**Admin Commands:**
+• `/adduser <user_id>` - Grant access to a user by ID
+• `/addusername <username>` - Grant access to a user by username
+• `/removeuser <user_id>` - Remove access from a user
+• `/listusers` - List all authorized users
+• `/pendingusers` - List pending usernames
+• `/removeusername <username>` - Remove pending username
+• `/stats` - Bot statistics
+"""
+
+    welcome_message += """
 **Limits:**
 • Maximum 10,000 users per request
 • Maximum 5 requests per minute per user
@@ -248,29 +413,36 @@ Ready to generate some user data? 🚀
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /help command."""
+    user_id = update.effective_user.id
+    
+    if not is_authorized(user_id):
+        await update.message.reply_text(
+            "🚫 You are not authorized to use this bot. Please contact an administrator."
+        )
+        return
+    
     help_message = """
 📋 **CSV Generator Bot Help**
 
-**Command Formats:**
-`/g <quantity> <domain>` - Default password (Soller123@)
-`/gp <quantity> <domain> <password>` - Custom password
+**Command Format:**
+`/g <quantity> <domain> [password]`
 
 **Parameters:**
 • `quantity` - Number of users to generate (1-10,000)
 • `domain` - Email domain (e.g., company.com)
-• `password` - Custom password for /gp command
+• `password` - Optional custom password (default: Soller123@)
 
 **Examples:**
-• `/g 50 example.com`
-• `/g 1000 mycompany.org`
-• `/gp 100 test.com MyPass123`
-• `/gp 500 company.net SecurePassword!`
+• `/g 50 example.com` (default password)
+• `/g 1000 mycompany.org` (default password)
+• `/g 100 test.com MyPass123` (custom password)
+• `/g 500 company.net SecurePassword!` (custom password)
 
 **Output Format:**
 The CSV file includes these fields:
 - First Name, Last Name
 - Email Address (format: firstnamelastname123@domain)
-- Password (default: Soller123@ or custom for /gp)
+- Password (default: Soller123@ or your custom password)
 - Org Unit Path (default: /)
 - And 25 other Google Workspace fields
 
@@ -281,27 +453,323 @@ The CSV file includes these fields:
 
 **File Naming:**
 Generated files are named: `<quantity>-<domain>.csv`
+"""
 
-Need help? Contact the bot administrator.
-    """
+    if is_admin(user_id):
+        help_message += """
+
+**Admin Commands:**
+• `/adduser <user_id>` - Grant access to a user by ID
+• `/addusername <username>` - Grant access to a user by username  
+• `/removeuser <user_id>` - Remove access from a user
+• `/listusers` - List all authorized users
+• `/pendingusers` - List pending usernames
+• `/removeusername <username>` - Remove pending username
+• `/stats` - Bot statistics
+
+**Admin Examples:**
+• `/adduser 123456789` - Add user ID 123456789
+• `/addusername johndoe` - Add username (without @)
+• `/removeuser 123456789` - Remove user ID 123456789
+• `/removeusername johndoe` - Remove pending username
+"""
+
+    help_message += "\n\nNeed help? Contact the bot administrator."
     await update.message.reply_text(help_message, parse_mode='Markdown')
 
 
-async def g_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /g command to generate CSV files with default password."""
-    await generate_csv_command(update, context, default_password=True)
-
-
-async def gp_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /gp command to generate CSV files with custom password."""
-    await generate_csv_command(update, context, default_password=False)
-
-
-async def generate_csv_command(update: Update, context: ContextTypes.DEFAULT_TYPE, default_password: bool = True) -> None:
-    """Handle CSV generation commands."""
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /status command to show user's access status."""
     user_id = update.effective_user.id
-    command_name = "/g" if default_password else "/gp"
-    expected_args = 2 if default_password else 3
+    username = update.effective_user.username or "Unknown"
+    
+    status_message = f"""
+📊 **Your Status**
+
+User ID: `{user_id}`
+Username: @{username}
+Authorization: {"✅ Authorized" if is_authorized(user_id) else "❌ Not Authorized"}
+Admin: {"👑 Yes" if is_admin(user_id) else "👤 No"}
+
+Total Authorized Users: {len(authorized_users)}
+Pending Usernames: {len(pending_usernames)}
+    """
+    
+    await update.message.reply_text(status_message, parse_mode='Markdown')
+
+
+async def adduser_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /adduser command (admin only)."""
+    user_id = update.effective_user.id
+    
+    if not is_admin(user_id):
+        await update.message.reply_text("🚫 This command is only available to administrators.")
+        return
+    
+    if len(context.args) != 1:
+        await update.message.reply_text(
+            "❌ Invalid format!\n\n"
+            "Usage: `/adduser <user_id>`\n"
+            "Example: `/adduser 123456789`",
+            parse_mode='Markdown'
+        )
+        return
+    
+    try:
+        target_user_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ Invalid user ID! Please provide a numeric user ID.")
+        return
+    
+    if target_user_id in authorized_users:
+        await update.message.reply_text(f"ℹ️ User `{target_user_id}` is already authorized.", parse_mode='Markdown')
+        return
+    
+    authorized_users.add(target_user_id)
+    save_authorized_users()
+    
+    await update.message.reply_text(
+        f"✅ **User Added Successfully!**\n\n"
+        f"User ID: `{target_user_id}`\n"
+        f"Total authorized users: {len(authorized_users)}",
+        parse_mode='Markdown'
+    )
+    
+    logger.info(f"Admin {user_id} added user {target_user_id} to authorized list")
+
+
+async def addusername_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /addusername command (admin only)."""
+    user_id = update.effective_user.id
+    
+    if not is_admin(user_id):
+        await update.message.reply_text("🚫 This command is only available to administrators.")
+        return
+    
+    if len(context.args) != 1:
+        await update.message.reply_text(
+            "❌ Invalid format!\n\n"
+            "Usage: `/addusername <username>`\n"
+            "Example: `/addusername johndoe` (without @)",
+            parse_mode='Markdown'
+        )
+        return
+    
+    username = context.args[0].strip().lstrip('@')  # Remove @ if present
+    
+    if not username:
+        await update.message.reply_text("❌ Invalid username! Please provide a valid username.")
+        return
+    
+    if username in pending_usernames:
+        await update.message.reply_text(f"ℹ️ Username `@{username}` is already in pending list.", parse_mode='Markdown')
+        return
+    
+    pending_usernames.add(username)
+    save_pending_usernames()
+    
+    await update.message.reply_text(
+        f"✅ **Username Added to Pending List!**\n\n"
+        f"Username: `@{username}`\n"
+        f"When this user interacts with the bot, they will be automatically authorized.\n\n"
+        f"Total pending usernames: {len(pending_usernames)}",
+        parse_mode='Markdown'
+    )
+    
+    logger.info(f"Admin {user_id} added username @{username} to pending list")
+
+
+async def removeuser_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /removeuser command (admin only)."""
+    user_id = update.effective_user.id
+    
+    if not is_admin(user_id):
+        await update.message.reply_text("🚫 This command is only available to administrators.")
+        return
+    
+    if len(context.args) != 1:
+        await update.message.reply_text(
+            "❌ Invalid format!\n\n"
+            "Usage: `/removeuser <user_id>`\n"
+            "Example: `/removeuser 123456789`",
+            parse_mode='Markdown'
+        )
+        return
+    
+    try:
+        target_user_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ Invalid user ID! Please provide a numeric user ID.")
+        return
+    
+    if target_user_id in ADMIN_IDS:
+        await update.message.reply_text("🚫 Cannot remove admin users from the authorized list.")
+        return
+    
+    if target_user_id not in authorized_users:
+        await update.message.reply_text(f"ℹ️ User `{target_user_id}` is not in the authorized list.", parse_mode='Markdown')
+        return
+    
+    authorized_users.remove(target_user_id)
+    save_authorized_users()
+    
+    await update.message.reply_text(
+        f"✅ **User Removed Successfully!**\n\n"
+        f"User ID: `{target_user_id}`\n"
+        f"Total authorized users: {len(authorized_users)}",
+        parse_mode='Markdown'
+    )
+    
+    logger.info(f"Admin {user_id} removed user {target_user_id} from authorized list")
+
+
+async def removeusername_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /removeusername command (admin only)."""
+    user_id = update.effective_user.id
+    
+    if not is_admin(user_id):
+        await update.message.reply_text("🚫 This command is only available to administrators.")
+        return
+    
+    if len(context.args) != 1:
+        await update.message.reply_text(
+            "❌ Invalid format!\n\n"
+            "Usage: `/removeusername <username>`\n"
+            "Example: `/removeusername johndoe` (without @)",
+            parse_mode='Markdown'
+        )
+        return
+    
+    username = context.args[0].strip().lstrip('@')  # Remove @ if present
+    
+    if not username:
+        await update.message.reply_text("❌ Invalid username! Please provide a valid username.")
+        return
+    
+    # Find username (case-insensitive)
+    username_to_remove = None
+    for pending_username in pending_usernames:
+        if pending_username.lower() == username.lower():
+            username_to_remove = pending_username
+            break
+    
+    if not username_to_remove:
+        await update.message.reply_text(f"ℹ️ Username `@{username}` is not in the pending list.", parse_mode='Markdown')
+        return
+    
+    pending_usernames.remove(username_to_remove)
+    save_pending_usernames()
+    
+    await update.message.reply_text(
+        f"✅ **Username Removed Successfully!**\n\n"
+        f"Username: `@{username_to_remove}`\n"
+        f"Total pending usernames: {len(pending_usernames)}",
+        parse_mode='Markdown'
+    )
+    
+    logger.info(f"Admin {user_id} removed username @{username_to_remove} from pending list")
+
+
+async def listusers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /listusers command (admin only)."""
+    user_id = update.effective_user.id
+    
+    if not is_admin(user_id):
+        await update.message.reply_text("🚫 This command is only available to administrators.")
+        return
+    
+    if not authorized_users:
+        await update.message.reply_text("📝 No authorized users found.")
+        return
+    
+    admin_users = [uid for uid in authorized_users if uid in ADMIN_IDS]
+    regular_users = [uid for uid in authorized_users if uid not in ADMIN_IDS]
+    
+    message = "📝 **Authorized Users List**\n\n"
+    
+    if admin_users:
+        message += "👑 **Admins:**\n"
+        for admin_id in sorted(admin_users):
+            message += f"• `{admin_id}`\n"
+        message += "\n"
+    
+    if regular_users:
+        message += "👤 **Regular Users:**\n"
+        for reg_id in sorted(regular_users):
+            message += f"• `{reg_id}`\n"
+        message += "\n"
+    
+    message += f"**Total:** {len(authorized_users)} users"
+    
+    await update.message.reply_text(message, parse_mode='Markdown')
+
+
+async def pendingusers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /pendingusers command (admin only)."""
+    user_id = update.effective_user.id
+    
+    if not is_admin(user_id):
+        await update.message.reply_text("🚫 This command is only available to administrators.")
+        return
+    
+    if not pending_usernames:
+        await update.message.reply_text("📝 No pending usernames found.")
+        return
+    
+    message = "⏳ **Pending Usernames**\n\n"
+    message += "These users will be automatically authorized when they interact with the bot:\n\n"
+    
+    for username in sorted(pending_usernames):
+        message += f"• `@{username}`\n"
+    
+    message += f"\n**Total:** {len(pending_usernames)} pending usernames"
+    
+    await update.message.reply_text(message, parse_mode='Markdown')
+
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /stats command (admin only)."""
+    user_id = update.effective_user.id
+    
+    if not is_admin(user_id):
+        await update.message.reply_text("🚫 This command is only available to administrators.")
+        return
+    
+    admin_count = len([uid for uid in authorized_users if uid in ADMIN_IDS])
+    regular_count = len(authorized_users) - admin_count
+    
+    stats_message = f"""
+📊 **Bot Statistics**
+
+**Users:**
+• Total Authorized: {len(authorized_users)}
+• Admins: {admin_count}
+• Regular Users: {regular_count}
+• Pending Usernames: {len(pending_usernames)}
+
+**Database:**
+• Names in database: {len(names_database):,}
+• Active requests tracking: {len(user_requests)} users
+
+**Configuration:**
+• Max quantity per request: {MAX_QUANTITY:,}
+• Rate limit: {RATE_LIMIT_PER_MINUTE} requests/minute
+• Output directory: `{OUTPUT_DIR}`
+    """
+    
+    await update.message.reply_text(stats_message, parse_mode='Markdown')
+
+
+async def g_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /g command to generate CSV files with optional custom password."""
+    user_id = update.effective_user.id
+    
+    # Check authorization first
+    if not is_authorized(user_id):
+        await update.message.reply_text(
+            "🚫 You are not authorized to use this bot. Please contact an administrator for access."
+        )
+        return
     
     # Check rate limiting
     if not check_rate_limit(user_id):
@@ -310,33 +778,29 @@ async def generate_csv_command(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return
     
-    # Validate arguments
-    if len(context.args) != expected_args:
-        if default_password:
-            await update.message.reply_text(
-                "❌ Invalid command format!\n\n"
-                "Correct usage: `/g <quantity> <domain>`\n"
-                "Example: `/g 100 company.com`",
-                parse_mode='Markdown'
-            )
-        else:
-            await update.message.reply_text(
-                "❌ Invalid command format!\n\n"
-                "Correct usage: `/gp <quantity> <domain> <password>`\n"
-                "Example: `/gp 100 company.com MyPassword123`",
-                parse_mode='Markdown'
-            )
+    # Validate arguments (2 or 3 arguments allowed)
+    if len(context.args) < 2 or len(context.args) > 3:
+        await update.message.reply_text(
+            "❌ Invalid command format!\n\n"
+            "Correct usage: `/g <quantity> <domain> [password]`\n\n"
+            "Examples:\n"
+            "• `/g 100 company.com` (default password)\n"
+            "• `/g 100 company.com MyPassword123` (custom password)",
+            parse_mode='Markdown'
+        )
         return
     
     # Parse arguments
     try:
         quantity = int(context.args[0])
         domain = context.args[1].lower()
-        password = 'Soller123@' if default_password else context.args[2]
+        password = 'Soller123@' if len(context.args) == 2 else context.args[2]
     except ValueError:
         await update.message.reply_text(
-            f"❌ Invalid quantity! Please provide a valid number.\n"
-            f"Example: `{command_name} 100 company.com{'MyPassword123' if not default_password else ''}`",
+            "❌ Invalid quantity! Please provide a valid number.\n"
+            "Examples:\n"
+            "• `/g 100 company.com`\n"
+            "• `/g 100 company.com MyPassword123`",
             parse_mode='Markdown'
         )
         return
@@ -357,11 +821,11 @@ async def generate_csv_command(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return
     
-    # Validate password (basic check for /gp command)
-    if not default_password and len(password.strip()) < 1:
+    # Validate password (basic check for custom password)
+    if len(context.args) == 3 and len(password.strip()) < 1:
         await update.message.reply_text(
             "❌ Invalid password! Password cannot be empty.\n"
-            "Example: `/gp 100 company.com MyPassword123`",
+            "Example: `/g 100 company.com MyPassword123`",
             parse_mode='Markdown'
         )
         return
@@ -373,10 +837,13 @@ async def generate_csv_command(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return
     
+    # Determine if using default or custom password
+    is_default_password = len(context.args) == 2
+    
     # Send processing message
     processing_msg = await update.message.reply_text(
         f"🔄 Generating CSV file with {quantity:,} users for domain `{domain}`...\n"
-        f"Password: `{'Default (Soller123@)' if default_password else 'Custom'}`\n"
+        f"Password: `{'Default (Soller123@)' if is_default_password else 'Custom'}`\n"
         f"Please wait, this may take a moment.",
         parse_mode='Markdown'
     )
@@ -412,9 +879,8 @@ async def generate_csv_command(update: Update, context: ContextTypes.DEFAULT_TYP
                        f"• Domain: `{domain}`\n"
                        f"• File size: {file_size_mb:.2f} MB\n"
                        f"• Generation time: {generation_time:.2f}s\n"
-                       f"• Password: `{'Soller123@' if default_password else 'Custom'}`\n\n"
-                       f"📝 **Format:** Google Workspace bulk import\n"
-                       f"🔒 **Command used:** `{command_name}`",
+                       f"• Password: `{'Soller123@' if is_default_password else 'Custom'}`\n\n"
+                       f"📝 **Format:** Google Workspace bulk import",
                 parse_mode='Markdown'
             )
         
@@ -424,7 +890,7 @@ async def generate_csv_command(update: Update, context: ContextTypes.DEFAULT_TYP
         # Clean up the generated file
         os.remove(filepath)
         
-        logger.info(f"Generated CSV for user {user_id}: {quantity} users for {domain} using {command_name}")
+        logger.info(f"Generated CSV for user {user_id}: {quantity} users for {domain} with {'default' if is_default_password else 'custom'} password")
         
     except Exception as e:
         logger.error(f"Error generating CSV: {e}")
@@ -447,6 +913,10 @@ def main() -> None:
         print("You can get a bot token from @BotFather on Telegram.")
         return
     
+    # Load authorized users and pending usernames
+    load_authorized_users()
+    load_pending_usernames()
+    
     # Load names database
     if not load_names_database():
         logger.error("Failed to load names database!")
@@ -460,11 +930,23 @@ def main() -> None:
     # Create application
     application = Application.builder().token(BOT_TOKEN).build()
     
+    # Add message handler for auto-authentication (should be first)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
     # Add command handlers
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CommandHandler("g", g_command))
-    application.add_handler(CommandHandler("gp", gp_command))
+    
+    # Admin commands
+    application.add_handler(CommandHandler("adduser", adduser_command))
+    application.add_handler(CommandHandler("addusername", addusername_command))
+    application.add_handler(CommandHandler("removeuser", removeuser_command))
+    application.add_handler(CommandHandler("removeusername", removeusername_command))
+    application.add_handler(CommandHandler("listusers", listusers_command))
+    application.add_handler(CommandHandler("pendingusers", pendingusers_command))
+    application.add_handler(CommandHandler("stats", stats_command))
     
     # Add error handler
     application.add_error_handler(error_handler)
@@ -473,11 +955,15 @@ def main() -> None:
     logger.info("Starting Telegram Bot CSV Generator...")
     print("🤖 Starting Telegram Bot CSV Generator...")
     print(f"📊 Loaded {len(names_database):,} names from database")
+    print(f"👥 Loaded {len(authorized_users)} authorized users")
+    print(f"⏳ Loaded {len(pending_usernames)} pending usernames")
+    print(f"👑 Admin IDs: {', '.join(map(str, ADMIN_IDS))}")
     print(f"📁 Output directory: {OUTPUT_DIR}")
     print(f"⚡ Rate limit: {RATE_LIMIT_PER_MINUTE} requests per minute")
     print(f"📝 Max quantity: {MAX_QUANTITY:,} users per file")
     print("🚀 Bot is running! Press Ctrl+C to stop.")
-    print("📋 Available commands: /g, /gp, /start, /help")
+    print("📋 Available commands: /g, /start, /help, /status")
+    print("🔧 Admin commands: /adduser, /addusername, /removeuser, /removeusername, /listusers, /pendingusers, /stats")
     
     # Run the bot
     application.run_polling(allowed_updates=Update.ALL_TYPES)
