@@ -18,8 +18,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 
 # Configuration
 BOT_TOKEN = os.getenv('TELEGRAM_BOTCSV_TOKEN', 'TOKEN_HERE')
@@ -371,6 +371,19 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     
     admin_status = "👑 Admin" if is_admin(user_id) else "👤 User"
     
+    # Create inline keyboard for start command
+    keyboard = [
+        [
+            InlineKeyboardButton("📋 Open Menu", callback_data="menu_main"),
+            InlineKeyboardButton("📊 Generate CSV", callback_data="menu_generate")
+        ],
+        [
+            InlineKeyboardButton("❓ Help", callback_data="menu_help")
+        ]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
     welcome_message = f"""
 🤖 **Welcome to CSV Generator Bot!**
 
@@ -379,36 +392,25 @@ User ID: `{user_id}`
 
 This bot generates CSV files with random user data for Google Workspace bulk import.
 
-**User Commands:**
-• `/g <quantity> <domain> [password]` - Generate CSV file
-• `/help` - Show detailed help
-• `/status` - Check your access status
+**Quick Start:**
+• Use `/menu` for interactive navigation
+• Use `/g <quantity> <domain> [password]` to generate files
 
-**Examples:**
-`/g 100 company.com` (uses default password: Soller123@)
-`/g 100 company.com MyPassword123` (uses custom password)
-"""
+**Example:**
+`/g 100 company.com` - Generate 100 users for company.com
 
-    if is_admin(user_id):
-        welcome_message += """
-**Admin Commands:**
-• `/adduser <user_id>` - Grant access to a user by ID
-• `/addusername <username>` - Grant access to a user by username
-• `/removeuser <user_id>` - Remove access from a user
-• `/listusers` - List all authorized users
-• `/pendingusers` - List pending usernames
-• `/removeusername <username>` - Remove pending username
-• `/stats` - Bot statistics
-"""
-
-    welcome_message += """
 **Limits:**
 • Maximum 10,000 users per request
 • Maximum 5 requests per minute per user
 
 Ready to generate some user data? 🚀
     """
-    await update.message.reply_text(welcome_message, parse_mode='Markdown')
+
+    await update.message.reply_text(
+        welcome_message, 
+        parse_mode='Markdown',
+        reply_markup=reply_markup
+    )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -904,6 +906,467 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     logger.error(f"Update {update} caused error {context.error}")
 
 
+async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /menu command - Show main menu with inline keyboard."""
+    user_id = update.effective_user.id
+    username = update.effective_user.username or "Unknown"
+    
+    # Check if user should be auto-authorized by username
+    if username != "Unknown" and not is_authorized(user_id):
+        was_authorized = check_and_authorize_username(username, user_id)
+        if was_authorized:
+            await update.message.reply_text(
+                f"🎉 **Automatically Authorized!**\n\n"
+                f"Welcome @{username}! You have been automatically authorized.\n\n"
+                f"Showing you the bot menu...",
+                parse_mode='Markdown'
+            )
+    
+    if not is_authorized(user_id):
+        await update.message.reply_text(
+            "🚫 **Access Denied**\n\n"
+            f"Your user ID: `{user_id}`\n"
+            f"Username: @{username}\n\n"
+            "You are not authorized to use this bot. Please contact an administrator to request access.",
+            parse_mode='Markdown'
+        )
+        return
+    
+    # Create main menu keyboard
+    keyboard = [
+        [
+            InlineKeyboardButton("📊 Generate CSV", callback_data="menu_generate"),
+            InlineKeyboardButton("❓ Help", callback_data="menu_help")
+        ],
+        [
+            InlineKeyboardButton("📋 Status", callback_data="menu_status"),
+            InlineKeyboardButton("📖 Examples", callback_data="menu_examples")
+        ]
+    ]
+    
+    # Add admin menu for admins
+    if is_admin(user_id):
+        keyboard.append([
+            InlineKeyboardButton("👑 Admin Panel", callback_data="menu_admin")
+        ])
+    
+    keyboard.append([
+        InlineKeyboardButton("🔄 Refresh Menu", callback_data="menu_main")
+    ])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    admin_status = "👑 Admin" if is_admin(user_id) else "👤 User"
+    
+    menu_text = f"""
+🤖 **CSV Generator Bot Menu**
+
+Welcome back! 👋
+Status: {admin_status}
+User ID: `{user_id}`
+
+Choose an option from the menu below:
+    """
+    
+    await update.message.reply_text(
+        menu_text,
+        parse_mode='Markdown',
+        reply_markup=reply_markup
+    )
+
+
+async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle callback queries from inline keyboards."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    # Answer the callback query to remove loading state
+    await query.answer()
+    
+    if not is_authorized(user_id):
+        await query.edit_message_text(
+            "🚫 You are not authorized to use this bot. Please contact an administrator."
+        )
+        return
+    
+    data = query.data
+    
+    if data == "menu_main":
+        await show_main_menu(query, user_id)
+    elif data == "menu_generate":
+        await show_generate_menu(query)
+    elif data == "menu_help":
+        await show_help_menu(query, user_id)
+    elif data == "menu_status":
+        await show_status_menu(query, user_id)
+    elif data == "menu_examples":
+        await show_examples_menu(query)
+    elif data == "menu_admin" and is_admin(user_id):
+        await show_admin_menu(query)
+    elif data == "admin_users":
+        await show_admin_users_menu(query)
+    elif data == "admin_usernames":
+        await show_admin_usernames_menu(query)
+    elif data == "admin_stats":
+        await show_admin_stats_menu(query, user_id)
+    elif data == "back_to_main":
+        await show_main_menu(query, user_id)
+    elif data == "back_to_admin":
+        await show_admin_menu(query)
+
+
+async def show_main_menu(query, user_id: int) -> None:
+    """Show the main menu."""
+    keyboard = [
+        [
+            InlineKeyboardButton("📊 Generate CSV", callback_data="menu_generate"),
+            InlineKeyboardButton("❓ Help", callback_data="menu_help")
+        ],
+        [
+            InlineKeyboardButton("📋 Status", callback_data="menu_status"),
+            InlineKeyboardButton("📖 Examples", callback_data="menu_examples")
+        ]
+    ]
+    
+    if is_admin(user_id):
+        keyboard.append([
+            InlineKeyboardButton("👑 Admin Panel", callback_data="menu_admin")
+        ])
+    
+    keyboard.append([
+        InlineKeyboardButton("🔄 Refresh Menu", callback_data="menu_main")
+    ])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    admin_status = "👑 Admin" if is_admin(user_id) else "👤 User"
+    
+    text = f"""
+🤖 **CSV Generator Bot Menu**
+
+Welcome back! 👋
+Status: {admin_status}
+User ID: `{user_id}`
+
+Choose an option from the menu below:
+    """
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=reply_markup
+    )
+
+
+async def show_generate_menu(query) -> None:
+    """Show the generate CSV menu."""
+    keyboard = [
+        [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="back_to_main")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    text = """
+📊 **Generate CSV File**
+
+To generate a CSV file, use this command format:
+
+`/g <quantity> <domain> [password]`
+
+**Parameters:**
+• `quantity` - Number of users (1-10,000)
+• `domain` - Email domain (e.g., company.com)
+• `password` - Optional custom password
+
+**Quick Examples:**
+• `/g 100 company.com` (default password)
+• `/g 500 test.org MyPassword123` (custom password)
+
+**Default Password:** Soller123@
+
+Just type your command in the chat!
+    """
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=reply_markup
+    )
+
+
+async def show_help_menu(query, user_id: int) -> None:
+    """Show the help menu."""
+    keyboard = [
+        [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="back_to_main")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    text = """
+❓ **Help & Information**
+
+**Main Command:**
+`/g <quantity> <domain> [password]`
+
+**Available Commands:**
+• `/menu` - Show this menu
+• `/start` - Bot introduction
+• `/help` - Detailed help
+• `/status` - Your access status
+• `/g` - Generate CSV file
+
+**Limits:**
+• Max 10,000 users per file
+• Max 5 requests per minute
+• Files auto-deleted after sending
+
+**Support:**
+Contact bot administrator for assistance.
+    """
+    
+    if is_admin(user_id):
+        text += """
+
+**Admin Commands:**
+• `/adduser <id>` - Add user by ID
+• `/addusername <name>` - Add user by username
+• `/removeuser <id>` - Remove user
+• `/listusers` - List all users
+• `/stats` - Bot statistics
+"""
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=reply_markup
+    )
+
+
+async def show_status_menu(query, user_id: int) -> None:
+    """Show the status menu."""
+    keyboard = [
+        [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="back_to_main")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    username = query.from_user.username or "Unknown"
+    
+    text = f"""
+📋 **Your Status**
+
+**User Information:**
+• User ID: `{user_id}`
+• Username: @{username}
+• Authorization: ✅ Authorized
+• Admin: {"👑 Yes" if is_admin(user_id) else "👤 No"}
+
+**Bot Statistics:**
+• Total Authorized Users: {len(authorized_users)}
+• Pending Usernames: {len(pending_usernames)}
+• Names in Database: {len(names_database):,}
+
+**Your Limits:**
+• Max quantity: {MAX_QUANTITY:,} users per file
+• Rate limit: {RATE_LIMIT_PER_MINUTE} requests per minute
+    """
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=reply_markup
+    )
+
+
+async def show_examples_menu(query) -> None:
+    """Show the examples menu."""
+    keyboard = [
+        [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="back_to_main")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    text = """
+📖 **Command Examples**
+
+**Basic Usage:**
+• `/g 50 company.com`
+  → 50 users with default password
+
+• `/g 1000 example.org`
+  → 1000 users with default password
+
+**Custom Password:**
+• `/g 100 test.com MyPass123`
+  → 100 users with custom password
+
+• `/g 500 corp.net SecurePass!`
+  → 500 users with custom password
+
+**Common Domains:**
+• `.com` - Commercial
+• `.org` - Organization
+• `.net` - Network
+• `.edu` - Educational
+• `.gov` - Government
+
+**Tips:**
+• Use realistic quantities (10-1000 typical)
+• Domain must be valid format
+• Custom passwords override default
+• Files are automatically formatted for Google Workspace
+    """
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=reply_markup
+    )
+
+
+async def show_admin_menu(query) -> None:
+    """Show the admin menu."""
+    keyboard = [
+        [
+            InlineKeyboardButton("👥 Manage Users", callback_data="admin_users"),
+            InlineKeyboardButton("📝 Manage Usernames", callback_data="admin_usernames")
+        ],
+        [
+            InlineKeyboardButton("📊 Statistics", callback_data="admin_stats")
+        ],
+        [
+            InlineKeyboardButton("🔙 Back to Main Menu", callback_data="back_to_main")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    admin_count = len([uid for uid in authorized_users if uid in ADMIN_IDS])
+    regular_count = len(authorized_users) - admin_count
+    
+    text = f"""
+👑 **Admin Panel**
+
+**Quick Overview:**
+• Total Users: {len(authorized_users)}
+• Admins: {admin_count}
+• Regular Users: {regular_count}
+• Pending Usernames: {len(pending_usernames)}
+
+**Available Actions:**
+Choose an option below to manage the bot.
+    """
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=reply_markup
+    )
+
+
+async def show_admin_users_menu(query) -> None:
+    """Show the admin users management menu."""
+    keyboard = [
+        [InlineKeyboardButton("🔙 Back to Admin Panel", callback_data="back_to_admin")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    admin_users = [uid for uid in authorized_users if uid in ADMIN_IDS]
+    regular_users = [uid for uid in authorized_users if uid not in ADMIN_IDS]
+    
+    text = "👥 **User Management**\n\n"
+    
+    if admin_users:
+        text += "👑 **Admins:**\n"
+        for admin_id in sorted(admin_users):
+            text += f"• `{admin_id}`\n"
+        text += "\n"
+    
+    if regular_users:
+        text += "👤 **Regular Users:**\n"
+        for reg_id in sorted(regular_users):
+            text += f"• `{reg_id}`\n"
+        text += "\n"
+    
+    text += f"**Total:** {len(authorized_users)} users\n\n"
+    text += "**Commands:**\n"
+    text += "• `/adduser <user_id>` - Add user by ID\n"
+    text += "• `/removeuser <user_id>` - Remove user\n"
+    text += "• `/listusers` - Detailed list"
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=reply_markup
+    )
+
+
+async def show_admin_usernames_menu(query) -> None:
+    """Show the admin usernames management menu."""
+    keyboard = [
+        [InlineKeyboardButton("🔙 Back to Admin Panel", callback_data="back_to_admin")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    text = "📝 **Username Management**\n\n"
+    
+    if pending_usernames:
+        text += "⏳ **Pending Usernames:**\n"
+        for username in sorted(pending_usernames):
+            text += f"• `@{username}`\n"
+        text += "\n"
+    else:
+        text += "⏳ **Pending Usernames:** None\n\n"
+    
+    text += f"**Total:** {len(pending_usernames)} pending usernames\n\n"
+    text += "**Commands:**\n"
+    text += "• `/addusername <username>` - Add pending username\n"
+    text += "• `/removeusername <username>` - Remove pending username\n"
+    text += "• `/pendingusers` - Detailed list\n\n"
+    text += "**Note:** Users with pending usernames will be auto-authorized when they first interact with the bot."
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=reply_markup
+    )
+
+
+async def show_admin_stats_menu(query, user_id: int) -> None:
+    """Show the admin statistics menu."""
+    keyboard = [
+        [InlineKeyboardButton("🔙 Back to Admin Panel", callback_data="back_to_admin")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    admin_count = len([uid for uid in authorized_users if uid in ADMIN_IDS])
+    regular_count = len(authorized_users) - admin_count
+    
+    text = f"""
+📊 **Bot Statistics**
+
+**Users:**
+• Total Authorized: {len(authorized_users)}
+• Admins: {admin_count}
+• Regular Users: {regular_count}
+• Pending Usernames: {len(pending_usernames)}
+
+**Database:**
+• Names in database: {len(names_database):,}
+• Active request tracking: {len(user_requests)} users
+
+**Configuration:**
+• Max quantity per request: {MAX_QUANTITY:,}
+• Rate limit: {RATE_LIMIT_PER_MINUTE} requests/minute
+• Output directory: `{OUTPUT_DIR}`
+
+**Files:**
+• Authorization file: `{AUTH_FILE}`
+• Pending usernames: `{PENDING_USERNAMES_FILE}`
+• Names database: `name_us.json`
+    """
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=reply_markup
+    )
+
+
 def main() -> None:
     """Main function to run the bot."""
     # Check bot token
@@ -935,6 +1398,7 @@ def main() -> None:
     
     # Add command handlers
     application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("menu", menu_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CommandHandler("g", g_command))
@@ -947,6 +1411,9 @@ def main() -> None:
     application.add_handler(CommandHandler("listusers", listusers_command))
     application.add_handler(CommandHandler("pendingusers", pendingusers_command))
     application.add_handler(CommandHandler("stats", stats_command))
+    
+    # Add callback query handler for inline keyboards
+    application.add_handler(CallbackQueryHandler(handle_callback_query))
     
     # Add error handler
     application.add_error_handler(error_handler)
@@ -962,7 +1429,7 @@ def main() -> None:
     print(f"⚡ Rate limit: {RATE_LIMIT_PER_MINUTE} requests per minute")
     print(f"📝 Max quantity: {MAX_QUANTITY:,} users per file")
     print("🚀 Bot is running! Press Ctrl+C to stop.")
-    print("📋 Available commands: /g, /start, /help, /status")
+    print("📋 Available commands: /menu, /g, /start, /help, /status")
     print("🔧 Admin commands: /adduser, /addusername, /removeuser, /removeusername, /listusers, /pendingusers, /stats")
     
     # Run the bot
